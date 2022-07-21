@@ -1,5 +1,5 @@
 ﻿#include "rc/version.h"
-#include "clipboard.h"
+#include "Clipboard.h"
 
 #include <ParamsAPI2.hpp>
 #include <TermAPI.hpp>
@@ -10,26 +10,131 @@
 
 constexpr quip::uint DEFAULT_FORMAT{ 1 }; //< CF_TEXT == 1
 
+static struct {
+	bool quiet{ false };
+	std::optional<size_t> preview_width{ 120ull }, preview_lines{ 3ull };
+} Config;
+
+inline static constexpr int DEFAULT_LIST_COUNT{ 10 };
+
+inline std::ostream& operator<<(std::ostream& os, const std::optional<size_t>& s)
+{
+	if (s.has_value())
+		os << s.value();
+	else
+		os << "(none)";
+	return os;
+}
+
 struct Help {
 	const std::string& programName;
-	WINCONSTEXPR Help(const std::string& programName) :programName{ programName } {}
+	const std::string& topic;
+	WINCONSTEXPR Help(const std::string& programName, const std::string& topic) : programName{ programName }, topic{ topic } {}
 	friend std::ostream& operator<<(std::ostream& os, const Help& h)
 	{
-		return os
-			<< "quip  v" << quip_VERSION_EXTENDED << '\n'
-			<< "  CLI Clipboard Utility" << '\n'
-			<< '\n'
+	#define QUIP_HELP_HEADER "QuipCL  v" << quip_VERSION_EXTENDED << '\n' << "  CLI Clipboard Utility" << '\n' << '\n'
+		os;
+		if (h.topic.empty())
+			os
+			<< QUIP_HELP_HEADER
 			<< "USAGE:\n"
 			<< "  " << h.programName << " [OPTIONS]" << '\n'
 			<< '\n'
 			<< "  This program is designed to be used with shell pipe operators." << '\n'
-			<< "  # SETTING CLIPBOARD DATA" << '\n'
+			<< '\n'
+			<< "  # Examples #\n"
+			<< "  - set:  echo \"Hello World!\" | " << h.programName << '\n'
+			<< "  - get:  " << h.programName << " > data.txt" << '\n'
+			<< '\n'
+			<< "  Multiple set commands are allowed; each one is inserted into a buffer in order, before being-" << '\n'
+			<< "   copied to the clipboard.  Input piped from the shell always preceeds input from set commands." << '\n'
 			<< '\n'
 			<< "OPTIONS:\n"
-			<< "  -h, --help           Shows this help display, then exits." << '\n'
-			<< "  -v, --version        Prints the current version number, then exits." << '\n'
-			<< "  -q, --quiet          Prevents non-essential console output." << '\n'
+			<< "  -h, --help               Shows this help display, or detailed help for a specific option ." << '\n'
+			<< "  -v, --version            Prints the current version number, then exits." << '\n'
+			<< "  -q, --quiet              Prevents non-essential console output." << '\n'
+			<< "  -O                       Forces a print out of the current clipboard contents, regardless of other options." << '\n'
+			<< "  -s, --set <DATA>         Sets clipboard data to the given string argument.  This is an alternative to shell pipes." << '\n'
+			<< "  -p, --preview <IDX>      Shows a preview of the specified cache entry.  (0 is current, 1 is previous, etc.)" << '\n'
+			<< "  -l, --list [COUNT]       Shows a preview of a number of the most recent clipboard entries.  The default is 10." << '\n'
+			<< "  -d, --dim <<WID>:<LEN>>  Changes the dimensions of the history preview area.  Omit a number to remove that limit." << '\n'
+			<< "  -r, --recall <IDX>       Recalls the specified cache entry to the clipboard, replacing the current value." << '\n'
+			<< "  -c, --cache              Copy the current clipboard contents to the cache." << '\n'
+			<< "      --clear-cache        Deletes the entire clipboard history cache." << '\n'
+			<< "  -S, --cache-size         Gets the current size of the history cache." << '\n'
 			;
+		else {
+			std::string topic{ str::trim(h.topic) };
+			if (str::equalsAny(topic, "s", "set"))
+				os
+				<< QUIP_HELP_HEADER
+				<< "USAGE:\n"
+				<< "  " << h.programName << " -s|--set <STRING>" << '\n'
+				<< '\n'
+				<< "  The set option allows you to specify clipboard data with or without shell pipe operators." << '\n'
+				<< "  You can use any number of set options, as well as shell pipe operators, in the same command." << '\n'
+				<< "  Input received from STDIN always preceeds input from set commands." << '\n'
+				<< '\n'
+				<< "EXAMPLES:\n"
+				<< "  To set the current clipboard contents to \"Hello World!\", you could use any of these (non-exhaustive) methods:" << '\n'
+				<< "    echo \"Hello \" | " << h.programName << " -s=World!" << '\n'
+				<< "    echo \"Hello World!\" | " << h.programName << '\n'
+				<< "    " << h.programName << " -s='Hello World!'" << '\n'
+				;
+			else if (str::equalsAny(topic, "p", "preview"))
+				os
+				<< QUIP_HELP_HEADER
+				<< "USAGE:\n"
+				<< "  " << h.programName << " -p|--preview <INDEX>" << '\n'
+				<< '\n'
+				<< "  Shows a preview of cached clipboard data at the specified index." << '\n'
+				<< "  Indexes start at 0 (current), and increment by one for each previous entry, ending at the number of extant entries." << '\n'
+				<< "  Using this in conjunction with the '-d'/'--dim' option allows you to configure how much of the cached data to show." << '\n'
+				<< '\n'
+				<< "  You can view a list of previews of the most recent cache entries by using the -l|--list option." << '\n'
+				;
+			else if (str::equalsAny(topic, "l", "list"))
+				os
+				<< QUIP_HELP_HEADER
+				<< "USAGE:\n"
+				<< "  " << h.programName << " -l|--list [COUNT]" << '\n'
+				<< '\n'
+				<< "  Shows a preview of recent cache entries, starting from the current one.  The default count is " << DEFAULT_LIST_COUNT << ".\n"
+				<< "  When the -q|--quiet option is not specified, index numbers are shown before each cache entry." << '\n'
+				<< "  Using this in conjunction with the '-d'/'--dim' option allows you to configure how much of the cached data to show." << '\n'
+				;
+			else if (str::equalsAny(topic, "d", "dim"))
+				os
+				<< QUIP_HELP_HEADER
+				<< "USAGE:\n"
+				<< "  " << h.programName << " -d|--dim [<WIDTH>:<LINE_COUNT>]" << '\n'
+				<< '\n'
+				<< "  Sets the dimensions of the cache preview." << '\n'
+				<< "  The default width is " << Config.preview_width << ", while the default line count is " << Config.preview_lines << ".\n"
+				<< '\n'
+				<< "  When no argument is provided, the width and line count limits are disabled; previews will include the entire entry." << '\n'
+				<< "  When an argument is provided & it does NOT include a colon character ':', only the preview width is changed." << '\n'
+				<< '\n'
+				<< "EXAMPLES:\n"
+				<< "  Show the first 80 characters of the first 3 lines of the previous cache entry:" << '\n'
+				<< "    " << h.programName << " -d=80:3 -p=1" << '\n'
+				<< '\n'
+				<< "  To show the 5 most recent cache entries without truncating them:" << '\n'
+				<< "    " << h.programName << " -dl=5" << '\n'
+				;
+			else if (str::equalsAny(topic, "r", "recall"))
+				os
+				<< QUIP_HELP_HEADER
+				<< "USAGE:\n"
+				<< "  " << h.programName << " -r|--recall <INDEX>" << '\n'
+				<< '\n'
+				<< "  Recalls the data at the specified cache index to the clipboard." << '\n'
+				<< "  Note that this overwrites the current clipboard data without adding it to the cache." << '\n'
+				<< "  You can combine this with the -c|--cache option to cache the current clipboard data before overwriting it." << '\n'
+				;
+			else throw make_exception("There are no help topics for '", h.topic, "'!");
+		}
+		return os;
 	}
 };
 
@@ -38,17 +143,18 @@ int main(const int argc, char** argv)
 	try {
 		std::ios_base::sync_with_stdio(false); //< disable cin <=> STDIO synchronization (disables buffering for cin)
 
-		opt::ParamsAPI2 args{ argc, argv, 'f', "format" };
+		using namespace opt_literals;
+		opt::ParamsAPI2 args{ argc, argv, 'r'_req, "recall"_req, 'd', "dim", 's'_req, "set"_req, 'p'_req, "preview"_req, 'l', "list" };
 		const auto& [programPath, programName] { env::PATH().resolve_split(argv[0]) };
 
-		bool quiet{ args.check_any<opt::Flag, opt::Option>('q', "quiet") };
+		Config.quiet = args.check_any<opt::Flag, opt::Option>('q', "quiet");
 
 		if (args.check_any<opt::Flag, opt::Option>('h', "help")) {
-			std::cout << Help(programName.generic_string()) << std::endl;
+			std::cout << Help(programName.generic_string(), args.typegetv_any<opt::Flag, opt::Option>().value_or("")) << std::endl;
 			return 0;
 		}
 		else if (args.check_any<opt::Flag, opt::Option>('v', "version")) {
-			if (!quiet)
+			if (!Config.quiet)
 				std::cout << "quip  v";
 			std::cout << quip_VERSION_EXTENDED << std::endl;
 			return 0;
@@ -56,14 +162,128 @@ int main(const int argc, char** argv)
 
 		// begin
 
-		quip::Clipboard clipboard;
+		quip::Clipboard clipboard(programPath / "history");
 
-		if (hasPendingDataSTDIN()) { // input
-			std::stringstream buffer;
-			buffer << std::cin.rdbuf(); //< this works fine unless you're using Visual Studio's developer terminal; which inserts 12 bytes of garbage just for shits and giggles.
-			buffer >> clipboard;
+		bool do_io_step{ true }; //< whether or not to perform the I/O step. (although it only affects output, input is always handled when given)
+
+		// HANDLE CONFIG ARGS:
+
+		if (const auto& dimArg{ args.typegetv_any<opt::Flag, opt::Option>('d', "dim") }; dimArg.has_value()) {
+			const auto& [width, lines] { str::split(dimArg.value(), ':') };
+
+			if (!width.empty()) {
+				if (std::all_of(width.begin(), width.end(), str::stdpred::isdigit))
+					Config.preview_width = str::stoull(width);
+				else throw make_exception("Invalid Preview Dimensions:  '", width, "' isn't a valid number for width!");
+			}
+			else Config.preview_width = std::nullopt;
+			if (!lines.empty()) {
+				if (std::all_of(lines.begin(), lines.end(), str::stdpred::isdigit))
+					Config.preview_lines = str::stoull(lines);
+				else throw make_exception("Invalid Preview Dimensions:  '", lines, "' isn't a valid number for line count!");
+			}
+			else Config.preview_lines = std::nullopt;
 		}
-		else // output
+		else if (args.check_any<opt::Flag, opt::Option>('d', "dim")) {
+			Config.preview_width = std::nullopt;
+			Config.preview_lines = std::nullopt;
+		}
+
+
+		// HANDLE 'BLOCKING' ARGS:
+
+		// Clear cached history
+		if (args.checkopt("clear-cache")) {
+			do_io_step = false;
+			if (const auto& count{ clipboard.history.delete_all() }; count > 0)
+				std::cout << term::get_msg() << "Deleted " << count << " cached clipboard entries." << std::endl;
+			else throw make_exception("Failed to delete all cache entries!");
+		}
+		// get cache size
+		if (args.check_any<opt::Flag, opt::Option>('S', "cache-size")) {
+			do_io_step = false;
+			std::cout << clipboard.history.size() << '\n';
+		}
+		// Show list of previews
+		if (args.check_any<opt::Flag, opt::Option>('l', "list")) {
+			do_io_step = false;
+
+			int count{ DEFAULT_LIST_COUNT };
+			if (const auto& countArg{ args.typegetv_any<opt::Flag, opt::Option>('l', "list") }; countArg.has_value()) {
+				const auto& s{ countArg.value() };
+				if (std::all_of(s.begin(), s.end(), str::stdpred::isdigit))
+					count = str::stoi(s);
+				else throw make_exception("Invalid List Count:  '", s, "' isn't a valid number!");
+			}
+
+			int i{ 0 };
+			bool fst{ true };
+			for (const auto& it : clipboard.history) {
+				if (fst) fst = false;
+				else {
+					std::cout << '\n';
+					if (!Config.quiet) std::cout << '\n';
+				}
+
+				if (!Config.quiet) std::cout << '[' << i << "]:\n";
+
+				std::cout << it.getPreview(Config.preview_width, Config.preview_lines, !Config.quiet);
+
+				if (++i >= count)
+					break;
+			}
+		}
+		// Show specific preview
+		if (const auto& previewArg{ args.castgetv_any<size_t, opt::Flag, opt::Option>(str::stoull, 'p', "preview") }; previewArg.has_value()) {
+			do_io_step = false;
+			const auto& idx{ previewArg.value() };
+
+			if (const auto& entry{ clipboard.history.get(idx) }; entry.has_value())
+				std::cout << entry.value().getPreview(Config.preview_width, Config.preview_lines, !Config.quiet);
+			else throw make_exception("Index ", idx, " does not exist in the history cache!");
+		}
+		// recall cache entry to clipboard
+		if (const auto& index{ args.castgetv_any<size_t, opt::Flag, opt::Option>(str::stoull, 'r', "recall") }; index.has_value()) {
+			do_io_step = false;
+			const auto& idx{ index.value() };
+
+			if (const auto& entry{ clipboard.history.get(idx) }; entry.has_value()) {
+				// If the cache option was specified, cache the current clipboard data before overwriting it.
+				if (args.check_any<opt::Flag, opt::Option>('c', "cache")) {
+					std::stringstream buffer;
+					buffer << clipboard;
+					clipboard.history.push(buffer.str());
+				}
+				entry.value().get() >> clipboard;
+			}
+			else throw make_exception("Index ", idx, " does not exist in the history cache!");
+		}
+		// add clipboard to cache
+		else if (args.check_any<opt::Flag, opt::Option>('c', "cache")) {
+			do_io_step = false;
+			std::stringstream ss;
+			ss << clipboard;
+			clipboard.history.push(ss.str());
+		}
+
+
+		// HANDLE PRIMARY I/O:
+
+		bool hasPendingData{ hasPendingDataSTDIN() };
+		const auto& setArgs{ args.typegetv_all<opt::Flag, opt::Option>('s', "set") };
+		if (!setArgs.empty() || hasPendingData) {
+			std::stringstream buffer;
+
+			if (hasPendingData)
+				buffer << std::cin.rdbuf();
+
+			for (const auto& it : setArgs)
+				buffer << it;
+
+			if (buffer.tellp() != 0ull)
+				buffer >> clipboard;
+		}
+		if ((do_io_step && (setArgs.empty() && !hasPendingData)) || args.checkflag('O'))
 			std::cout << clipboard;
 
 		return 0;

@@ -1,25 +1,34 @@
 #pragma once
+#include "History.hpp"
+
 #include <sysarch.h>
 
 #include <iostream>
 #include <optional>
 
 namespace quip {
-	std::string GetLastErrorMessage();
 	using uint = unsigned int;
 
+	/**
+	 * @brief	Represents the windows clipboard.
+	 */
 	class Clipboard {
-		mutable bool _open{ false };
+		void set_raw(const char*) const;
 
 	public:
-		Clipboard() {}
+		mutable History history;
 
+		Clipboard(std::filesystem::path const& history_directory, bool const& initHistoryCache = true) : history{ history_directory, initHistoryCache } {}
+
+		template<var::Streamable... Ts>
+		void set(Ts&&...) const;
+		std::string get(bool const& = false) const;
 		void clear() const;
-		void set(const char*) const;
-		void* get() const;
 
+		friend std::istream& operator>>(std::istream&, Clipboard&);
+		friend std::ostream& operator<<(std::ostream&, const Clipboard&);
 	};
 
-	std::istream& operator>>(std::istream&, Clipboard&);
-	std::ostream& operator<<(std::ostream&, const Clipboard&);
+	extern std::istream& operator>>(std::istream&, Clipboard&);
+	extern std::ostream& operator<<(std::ostream&, const Clipboard&);
 }
