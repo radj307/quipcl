@@ -1,5 +1,6 @@
 ﻿#include "rc/version.h"
 #include "Clipboard.h"
+#include "Config.hpp"
 
 #include <ParamsAPI2.hpp>
 #include <TermAPI.hpp>
@@ -8,21 +9,18 @@
 
 #include <iostream>
 
-constexpr quip::uint DEFAULT_FORMAT{ 1 }; //< CF_TEXT == 1
-
-static struct {
-	bool quiet{ false };
-	std::optional<size_t> preview_width{ 120ull }, preview_lines{ 3ull };
-} Config;
-
 inline static constexpr int DEFAULT_LIST_COUNT{ 10 };
 
-inline std::ostream& operator<<(std::ostream& os, const std::optional<size_t>& s)
+/**
+ * @brief			Stream insertion operator for std::optional.
+ * @param os		std::ostream&
+ * @param optional	An instance of the std::optional wrapper containing a streamable type.
+ * @returns			std::ostream&
+ */
+template<var::Streamable T> std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional)
 {
-	if (s.has_value())
-		os << s.value();
-	else
-		os << "(none)";
+	if (optional.has_value())
+		os << optional.value();
 	return os;
 }
 
@@ -32,7 +30,12 @@ struct Help {
 	WINCONSTEXPR Help(const std::string& programName, const std::string& topic) : programName{ programName }, topic{ topic } {}
 	friend std::ostream& operator<<(std::ostream& os, const Help& h)
 	{
-	#define QUIP_HELP_HEADER "QuipCL  v" << quip_VERSION_EXTENDED << '\n' << "  CLI Clipboard Utility" << '\n' << '\n'
+	#ifdef OS_WIN
+	#define _QUIP_VERSIONNAME "(Windows)"
+	#else
+	#define _QUIP_VERSIONNAME ""
+	#endif
+	#define QUIP_HELP_HEADER "QuipCL v" << quip_VERSION_EXTENDED << " " _QUIP_VERSIONNAME << '\n' << "  Commandline clipboard utility & history manager." << '\n' << '\n'
 		os;
 		if (h.topic.empty())
 			os
@@ -155,7 +158,7 @@ int main(const int argc, char** argv)
 		}
 		else if (args.check_any<opt::Flag, opt::Option>('v', "version")) {
 			if (!Config.quiet)
-				std::cout << "quip  v";
+				std::cout << "QuipCL  v";
 			std::cout << quip_VERSION_EXTENDED << std::endl;
 			return 0;
 		}
@@ -168,7 +171,7 @@ int main(const int argc, char** argv)
 
 		// HANDLE CONFIG ARGS:
 
-		if (const auto& dimArg{ args.typegetv_any<opt::Flag, opt::Option>('d', "dim") }; dimArg.has_value()) {
+		if (const auto& dimArg{ args.typegetv_any<opt::Flag, opt::Option>('d', "dim") }; dimArg.has_value()) { // set dimensions from argument:
 			const auto& [width, lines] { str::split(dimArg.value(), ':') };
 
 			if (!width.empty()) {
@@ -184,7 +187,7 @@ int main(const int argc, char** argv)
 			}
 			else Config.preview_lines = std::nullopt;
 		}
-		else if (args.check_any<opt::Flag, opt::Option>('d', "dim")) {
+		else if (args.check_any<opt::Flag, opt::Option>('d', "dim")) { // dimensions argument was specified but did not specify an argument:
 			Config.preview_width = std::nullopt;
 			Config.preview_lines = std::nullopt;
 		}
