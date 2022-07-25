@@ -17,8 +17,9 @@ namespace quip {
 
 	public:
 		mutable History history;
+		bool useHistory;
 
-		Clipboard(std::filesystem::path const& history_directory, bool const& initHistoryCache = true) : history{ history_directory, initHistoryCache } {}
+		Clipboard(std::filesystem::path const& history_directory, const bool useHistory, const bool initHistoryCache = true) : history{ history_directory, useHistory && initHistoryCache }, useHistory{ useHistory } {}
 
 		template<var::Streamable... Ts>
 		void set(Ts&&...) const;

@@ -31,7 +31,8 @@ void quip::Clipboard::set_raw(const char* data) const
 	CloseClipboard();
 #endif
 
-	history.push(data);
+	if (this->useHistory)
+		history.push(data);
 }
 std::string quip::Clipboard::get(bool const& throwOnInvalidFormat) const
 {
@@ -48,8 +49,9 @@ std::string quip::Clipboard::get(bool const& throwOnInvalidFormat) const
 	if (ret != nullptr)
 		return{ (char*)ret };
 #else
-	if (const auto& latest{ history.get_latest() }; latest.has_value())
-		return latest.value().str();
+	if (this->useHistory)
+		if (const auto& latest{ history.get_latest() }; latest.has_value())
+			return latest.value().str();
 #endif
 	return{};
 }
@@ -62,7 +64,8 @@ void quip::Clipboard::clear() const
 	EmptyClipboard();
 	CloseClipboard();
 #else
-	history.push();
+	if (this->useHistory)
+		history.push();
 #endif
 }
 

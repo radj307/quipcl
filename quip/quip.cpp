@@ -31,11 +31,11 @@ struct Help {
 	friend std::ostream& operator<<(std::ostream& os, const Help& h)
 	{
 	#ifdef OS_WIN
-	#define _QUIP_VERSIONNAME "(Windows)"
+	#define _QUIP_DESC_EXTRA "  Integrates with the Windows system clipboard.\n\n"
 	#else
-	#define _QUIP_VERSIONNAME ""
+	#define _QUIP_DESC_EXTRA ""
 	#endif
-	#define QUIP_HELP_HEADER "QuipCL v" << quip_VERSION_EXTENDED << " " _QUIP_VERSIONNAME << '\n' << "  Commandline clipboard utility & history manager." << '\n' << '\n'
+	#define QUIP_HELP_HEADER "QuipCL v" << quip_VERSION_EXTENDED << '\n' << "  Commandline clipboard utility & history manager." << '\n' << '\n' << _QUIP_DESC_EXTRA
 		os;
 		if (h.topic.empty())
 			os
@@ -43,14 +43,7 @@ struct Help {
 			<< "USAGE:\n"
 			<< "  " << h.programName << " [OPTIONS]" << '\n'
 			<< '\n'
-			<< "  This program is designed to be used with shell pipe operators." << '\n'
-			<< '\n'
-			<< "  # Examples #\n"
-			<< "  - set:  echo \"Hello World!\" | " << h.programName << '\n'
-			<< "  - get:  " << h.programName << " > data.txt" << '\n'
-			<< '\n'
-			<< "  Multiple set commands are allowed; each one is inserted into a buffer in order, before being-" << '\n'
-			<< "   copied to the clipboard.  Input piped from the shell always preceeds input from set commands." << '\n'
+			<< "  This program is intended for use with shell pipe operators, but also accepts input via any number of set options." << '\n'
 			<< '\n'
 			<< "OPTIONS:\n"
 			<< "  -h, --help               Shows this help display, or detailed help for a specific option ." << '\n'
@@ -65,6 +58,7 @@ struct Help {
 			<< "  -c, --cache              Copy the current clipboard contents to the cache." << '\n'
 			<< "      --clear-cache        Deletes the entire clipboard history cache." << '\n'
 			<< "  -S, --cache-size         Gets the current size of the history cache." << '\n'
+			<< "      --write-ini          Creates or overwrites the configuration file with the default values, then exit." << '\n'
 			;
 		else {
 			std::string topic{ str::trim(h.topic) };
@@ -141,14 +135,39 @@ struct Help {
 	}
 };
 
+#include <ini/MINI.hpp>
+
 int main(const int argc, char** argv)
 {
 	try {
 		std::ios_base::sync_with_stdio(false); //< disable cin <=> STDIO synchronization (disables buffering for cin)
 
 		using namespace opt_literals;
-		opt::ParamsAPI2 args{ argc, argv, 'r'_req, "recall"_req, 'd', "dim", 's'_req, "set"_req, 'p'_req, "preview"_req, 'l', "list" };
+		opt::ParamsAPI2 args{ argc, argv, 's'_req, "set"_req, 'p'_req, "preview"_req, 'l'_opt, "list"_opt, 'd'_req, "dim"_req, 'r'_req, "recall"_req };
 		const auto& [programPath, programName] { env::PATH().resolve_split(argv[0]) };
+
+		const auto& configPath{ programPath / (std::filesystem::path{ programName }.replace_extension().generic_string() + ".ini") };
+
+		file::ini::MINI config{
+			{ "cache", {
+				{ "bEnableHistory", "true" },
+			{ "bAutoCache", "false" },
+		} },
+		};
+
+		if (args.checkopt("write-ini") || args.checkopt("ini-write")) {
+			std::filesystem::create_directories(configPath.root_directory());
+			if (config.write(configPath))
+				std::cout << "Successfully created '" << configPath.generic_string() << "'\n";
+			else throw make_exception("Failed to write to config file '", configPath.generic_string(), "'!");
+			return 0;
+		}
+
+		if (file::exists(configPath))
+			config.read(configPath, true);
+
+		const bool enableHistory{ config.checkv_any("cache", "bEnableHistory", [](std::string const& value) { return str::tolower(str::trim(value)) == "true"; }) };
+		const bool autoCache{ config.checkv_any("cache", "bAutoCache", [](std::string const& value) { return str::tolower(str::trim(value)) == "true"; }) };
 
 		Config.quiet = args.check_any<opt::Flag, opt::Option>('q', "quiet");
 
@@ -165,7 +184,7 @@ int main(const int argc, char** argv)
 
 		// begin
 
-		quip::Clipboard clipboard(programPath / "history");
+		quip::Clipboard clipboard(programPath / "history", enableHistory);
 
 		bool do_io_step{ true }; //< whether or not to perform the I/O step. (although it only affects output, input is always handled when given)
 
@@ -195,18 +214,6 @@ int main(const int argc, char** argv)
 
 		// HANDLE 'BLOCKING' ARGS:
 
-		// Clear cached history
-		if (args.checkopt("clear-cache")) {
-			do_io_step = false;
-			if (const auto& count{ clipboard.history.delete_all() }; count > 0)
-				std::cout << term::get_msg() << "Deleted " << count << " cached clipboard entries." << std::endl;
-			else throw make_exception("Failed to delete all cache entries!");
-		}
-		// get cache size
-		if (args.check_any<opt::Flag, opt::Option>('S', "cache-size")) {
-			do_io_step = false;
-			std::cout << clipboard.history.size() << '\n';
-		}
 		// Show list of previews
 		if (args.check_any<opt::Flag, opt::Option>('l', "list")) {
 			do_io_step = false;
@@ -252,7 +259,7 @@ int main(const int argc, char** argv)
 
 			if (const auto& entry{ clipboard.history.get(idx) }; entry.has_value()) {
 				// If the cache option was specified, cache the current clipboard data before overwriting it.
-				if (args.check_any<opt::Flag, opt::Option>('c', "cache")) {
+				if (autoCache || args.check_any<opt::Flag, opt::Option>('c', "cache")) {
 					std::stringstream buffer;
 					buffer << clipboard;
 					clipboard.history.push(buffer.str());
@@ -261,12 +268,24 @@ int main(const int argc, char** argv)
 			}
 			else throw make_exception("Index ", idx, " does not exist in the history cache!");
 		}
-		// add clipboard to cache
-		else if (args.check_any<opt::Flag, opt::Option>('c', "cache")) {
+		// add clipboard to cache (this has to occur AFTER recall or the indexes will be different)
+		else if (autoCache || args.check_any<opt::Flag, opt::Option>('c', "cache")) {
 			do_io_step = false;
 			std::stringstream ss;
 			ss << clipboard;
 			clipboard.history.push(ss.str());
+		}
+		// Clear cached history
+		if (args.checkopt("clear-cache")) {
+			do_io_step = false;
+			if (const auto& count{ clipboard.history.delete_all() }; count > 0)
+				std::cout << term::get_msg() << "Deleted " << count << " cached clipboard entries." << std::endl;
+			else throw make_exception("Failed to delete all cache entries!");
+		}
+		// get cache size
+		if (args.check_any<opt::Flag, opt::Option>('S', "cache-size")) {
+			do_io_step = false;
+			std::cout << clipboard.history.size() << '\n';
 		}
 
 
